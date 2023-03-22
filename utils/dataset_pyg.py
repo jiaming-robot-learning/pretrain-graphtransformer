@@ -18,7 +18,9 @@ from torch_geometric.data import Data
 from torch_geometric.data import InMemoryDataset
 from torch_geometric.data import Batch
 from itertools import repeat, product, chain
+from torch_geometric.datasets import ZINC
 
+from utils.splitters import scaffold_split
 
 # allowable node and edge features
 allowable_features = {
@@ -323,11 +325,17 @@ class MoleculeDatasetG(InMemoryDataset):
         data_list = []
 
         if self.dataset == 'zinc_standard_agent':
-            input_path = self.raw_paths[0]
-            input_df = pd.read_csv(input_path, sep=',', compression='gzip',
-                                   dtype='str')
+            input_df = pd.read_csv(f'dataset/zinc_standard_agent/raw/250k_rndm_zinc_drugs_clean_3.csv')
+            # input_path = self.raw_paths[1]
+            # input_df = pd.read_csv(input_path, sep=',', compression='gzip',
+            #                        dtype='str')
+            # zinc_id_list = list(input_df['zinc_id'])
             smiles_list = list(input_df['smiles'])
-            zinc_id_list = list(input_df['zinc_id'])
+            logp = input_df.logP.astype(float)
+            normalized_logp = (logp - logp.min())/(logp.max() - logp.min())
+            dqd = input_df.qed
+            sas = input_df.SAS
+
             for i in range(len(smiles_list)):
                 print(i)
                 s = smiles_list[i]
@@ -339,10 +347,12 @@ class MoleculeDatasetG(InMemoryDataset):
                         # Chem.SanitizeMol(rdkit_mol,
                         #                  sanitizeOps=Chem.SanitizeFlags.SANITIZE_KEKULIZE)
                         data = mol_to_graph_data_obj_simple(rdkit_mol)
+                        data.y = torch.tensor([normalized_logp[i],dqd[i],sas[i]])
+                        # data.y = torch.tensor([normalized_logp[i]])
                         # manually add mol id
-                        id = int(zinc_id_list[i].split('ZINC')[1].lstrip('0'))
-                        data.id = torch.tensor(
-                            [id])  # id here is zinc id value, stripped of
+                        # id = int(zinc_id_list[i].split('ZINC')[1].lstrip('0'))
+                        # data.id = torch.tensor(
+                        #     [id])  # id here is zinc id value, stripped of
                         # leading zeros
                         data_list.append(data)
                         data_smiles_list.append(smiles_list[i])
@@ -351,7 +361,6 @@ class MoleculeDatasetG(InMemoryDataset):
 
         elif self.dataset == 'chembl_filtered':
             ### get downstream test molecules.
-            from splitters import scaffold_split
 
             ### 
             downstream_dir = [

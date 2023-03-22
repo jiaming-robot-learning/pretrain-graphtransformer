@@ -228,7 +228,6 @@ def main():
         USER CONTROLS
     """
     
-    
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', help="Please give a config.json file with training/model/data/param details",
                         default='config/molecules_GraphTransformer_LapPE_ZINC_500k_sparse_graph_BN.json')
@@ -259,7 +258,7 @@ def main():
     parser.add_argument('--batch_norm', help="Please give a value for batch_norm")
     parser.add_argument('--self_loop', help="Please give a value for self_loop")
     parser.add_argument('--max_time', help="Please give a value for max_time")
-    parser.add_argument('--pos_enc_dim', help="Please give a value for pos_enc_dim", default=1)
+    parser.add_argument('--pos_enc_dim', help="Please give a value for pos_enc_dim" )
     parser.add_argument('--lap_pos_enc', help="Please give a value for lap_pos_enc")
     parser.add_argument('--wl_pos_enc', help="Please give a value for wl_pos_enc")
     args = parser.parse_args()
@@ -351,7 +350,7 @@ def main():
     net_params['num_atom_type'] = len(allowable_features['possible_atomic_num_list'])  # 28 # known meta-info about the zinc dataset; can be calculated as well
     net_params['num_bond_type'] = len(allowable_features['possible_bonds'])  # 4 # known meta-info about the zinc dataset; can be calculated as well
 
-    net_params['n_classes'] = 1 # only one class for regression
+    net_params['n_classes'] = dataset.train[0][1].shape[0] # set according to dataset label
 
     
     root_log_dir = out_dir + 'logs/' + MODEL_NAME + "_" + DATASET_NAME + "_GPU" + str(config['gpu']['id']) + "_" + time.strftime('%Hh%Mm%Ss_on_%b_%d_%Y')

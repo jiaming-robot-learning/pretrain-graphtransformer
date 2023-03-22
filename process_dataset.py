@@ -1,5 +1,6 @@
 from net.graph_transformer_net import GraphTransformerNet
 from utils.dataset_dgl import process_all_dataset
+from typing import Dict
 
 def main():
     process_all_dataset()

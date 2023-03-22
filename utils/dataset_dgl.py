@@ -192,8 +192,8 @@ class MoleculeDataset(torch.utils.data.Dataset):
         # The input samples is a list of pairs (graph, label).
         graphs, labels = map(list, zip(*samples))
         # labels = torch.tensor(np.array(labels)).unsqueeze(1)
-        # labels = torch.stack(labels,dim=0)
-        labels = torch.concat(labels).unsqueeze(1)
+        labels = torch.stack(labels,dim=0)
+        # labels = torch.concat(labels).unsqueeze(1)
         batched_graph = dgl.batch(graphs)       
         
         return batched_graph, labels
@@ -260,7 +260,11 @@ class MoleculeDGL(torch.utils.data.Dataset):
         if os.path.exists(fname):
             print(f'Loading dataset from {fname}...')
             self.graph_lists, self.graph_labels = load_graphs(f'dataset/{name}/processed/dataset_dgl_{split}.pkl')
-            self.graph_labels = list(self.graph_labels['glabel'])
+            if bool(self.graph_labels):
+                self.graph_labels = list(self.graph_labels['glabel'])
+            else:
+                self.graph_labels = []
+
         else:
             print(f'File {fname} doesnot exist. Init empty dataset instead.')
 
@@ -337,7 +341,7 @@ class MoleculeDatasetDGL(object):
         self.val = val_data
         self.test = test_data
         
-def process_all_dataset(reprocess=False):
+def process_all_dataset(reprocess=True):
     """Create dgl graph datasets
 
     Args:
@@ -345,7 +349,7 @@ def process_all_dataset(reprocess=False):
     """
     pretrain_dataset = [
             'zinc_standard_agent',
-            'chembl_filtered',
+            # 'chembl_filtered',
             ]
 
     for dataset_name in pretrain_dataset:
@@ -369,17 +373,17 @@ def process_all_dataset(reprocess=False):
         #     pickle.dump(dataset_dgl_all, f,protocol=pickle.HIGHEST_PROTOCOL)
         
     downstream_dir = [
-            'bace',
-            'bbbp',
-            'clintox',
-            'esol',
-            'freesolv',
-            'hiv',
-            'lipophilicity',
-            'muv',
-            'sider',
-            'tox21',
-            'toxcast',
+            # 'bace',
+            # 'bbbp',
+            # 'clintox',
+            # 'esol',
+            # 'freesolv',
+            # 'hiv',
+            # 'lipophilicity',
+            # 'muv',
+            # 'sider',
+            # 'tox21',
+            # 'toxcast',
             ]
 
     for dataset_name in downstream_dir:
@@ -442,7 +446,7 @@ def load_dataset(name):
             ]
     """
     
-    return MoleculeDataset('bbbp')
+    return MoleculeDataset(name)
 
 # def preprocess_zinc():
 #     zinc_dataset = MoleculeDatasetDGL(name='ZINC-full')
