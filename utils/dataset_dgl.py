@@ -1,6 +1,7 @@
 
 # adapted from
 import torch
+import json
 import dill 
 import pickle
 import torch.utils.data
@@ -9,7 +10,7 @@ import os
 import numpy as np
 
 import csv
-
+import copy
 import dgl
 
 from utils.splitters import scaffold_split
@@ -21,6 +22,7 @@ import hashlib
 from utils.dataset_pyg import MoleculeDatasetG, allowable_features
 import threading
 from dgl.data.utils import save_graphs, load_graphs
+import matplotlib.pyplot as plt
 
 def self_loop(g):
     """
@@ -73,12 +75,16 @@ def make_full_graph(g):
 
 
 
-def laplacian_positional_encoding(g, pos_enc_dim):
+def laplacian_positional_encoding(g, pos_enc_dim, padding='node'):
     """
         Graph positional encoding v/ Laplacian eigenvectors
     """
 
     # Laplacian
+    if padding == 'node':
+        num_nodes = len(g.nodes())
+        if num_nodes <= pos_enc_dim:
+            g.add_nodes(pos_enc_dim - num_nodes + 1) # because we don't use the first eigenvector
     A = g.adj(scipy_fmt='coo').astype(float)
     N = sp.diags(dgl.backend.asnumpy(g.in_degrees()).clip(1) ** -0.5, dtype=float)
     L = sp.eye(g.number_of_nodes()) - N * A * N
@@ -87,6 +93,7 @@ def laplacian_positional_encoding(g, pos_enc_dim):
     EigVal, EigVec = np.linalg.eig(L.toarray())
     idx = EigVal.argsort() # increasing order
     EigVal, EigVec = EigVal[idx], np.real(EigVec[:,idx])
+    
     g.ndata['lap_pos_enc'] = torch.from_numpy(EigVec[:,1:pos_enc_dim+1]).float() 
     
     return g
@@ -155,7 +162,7 @@ class MoleculeDataset(torch.utils.data.Dataset):
     Args:
         torch (_type_): _description_
     """
-    def __init__(self, name='zinc_dataset_full'):
+    def __init__(self, name, lap_dim=6):
         """
             Loading ZINC dataset
         """
@@ -165,7 +172,7 @@ class MoleculeDataset(torch.utils.data.Dataset):
         empty_dataset = MoleculeDGL()
         datasets = []
         for split in ['train','val','test']:
-            d = MoleculeDGL()
+            d = MoleculeDGL(pe_dim=lap_dim)
             d.load(name,split)
             datasets.append(d)
         
@@ -238,10 +245,11 @@ class MoleculeDGL(torch.utils.data.Dataset):
     Args:
         torch (_type_): _description_
     """
-    def __init__(self, data=None,n_thread=10):
+    def __init__(self, data=None,n_thread=10,pe_dim=6):
         
         self.graph_lists = []
         self.graph_labels = []
+        self.pe_dim = pe_dim
 
         if data is not None:
             self.data = data
@@ -322,24 +330,84 @@ class MoleculeDGL(torch.utils.data.Dataset):
                 DGLGraph with node feature stored in `feat` field
                 And its label.
         """
-        return self.graph_lists[idx], self.graph_labels[idx]
+        g = self.graph_lists[idx]
+        if 'lap_pos_enc' not in g.ndata:
+            g = laplacian_positional_encoding(g, self.pe_dim)
+        self.graph_lists[idx] = g
+        return g, self.graph_labels[idx]
 
-class MoleculeDatasetDGL(object):
-    """This class is used to save the dataset in a pickle file
+# class MoleculeDatasetDGL(object):
+#     """This class is used to save the dataset in a pickle file
 
-    Args:
-        object (_type_): _description_
-    """
-    def __init__(self, name, train_data, val_data, test_data):
+#     Args:
+#         object (_type_): _description_
+#     """
+#     def __init__(self, name, train_data, val_data, test_data):
         
-        self.name = name
+#         self.name = name
         
-        self.num_atom_type = len(allowable_features['possible_atomic_num_list'])  # 28 # known meta-info about the zinc dataset; can be calculated as well
-        self.num_bond_type = len(allowable_features['possible_bonds'])  # 4 # known meta-info about the zinc dataset; can be calculated as well
+#         self.num_atom_type = len(allowable_features['possible_atomic_num_list'])  # 28 # known meta-info about the zinc dataset; can be calculated as well
+#         self.num_bond_type = len(allowable_features['possible_bonds'])  # 4 # known meta-info about the zinc dataset; can be calculated as well
         
-        self.train = train_data
-        self.val = val_data
-        self.test = test_data
+#         self.train = train_data
+#         self.val = val_data
+#         self.test = test_data
+        
+
+def print_stat(dataset,name):
+    n_nodes = []
+    
+    for i in range(len(dataset)):
+        n_nodes.append(dataset[i].x.shape[0])
+    
+    n_nodes = np.array(n_nodes)
+    min_n = int(np.min(n_nodes))
+    max_n = int(np.max(n_nodes))
+    avg_n = int(np.mean(n_nodes))
+    
+    n_class = dataset[0].y.shape[0] if dataset[0].y is not None else 0
+    stats = {
+        'name': name,
+        'n_class': n_class,
+        'min_n_nodes': min_n,
+        'max_n_nodes': max_n,
+        'avg_n_nodes': avg_n,
+        'n_graphs': len(dataset),
+    }
+    with open(f'out/dataset_stats/stats_{name}.json', 'w') as f:
+        json.dump(stats, f)
+
+    _ = plt.hist(n_nodes, bins=max_n-min_n+1)
+    # plt.show()
+    plt.savefig(f"out/dataset_stats/node_num_hist_{name}.png")
+    
+    print(f"min_n: {min_n}, max_n: {max_n}, avg_n: {avg_n}, n_graphs: {len(dataset):,}, n_class: {n_class}")
+        
+def print_stats_all_dataset():
+    datasets = [
+            'zinc_small',
+            'zinc_full',
+            'chembl_filtered',
+            'bace',
+            'bbbp',
+            'clintox',
+            'esol',
+            'freesolv',
+            'hiv',
+            'lipophilicity',
+            'muv',
+            'sider',
+            'tox21',
+            'toxcast',
+    ]
+
+    for dataset_name in datasets:
+        # load G dataset
+        print(dataset_name)
+        root = "dataset/" + dataset_name
+        dataset = MoleculeDatasetG(root, dataset=dataset_name)
+        print(f"G dataset loaded {dataset_name}")
+        print_stat(dataset,dataset_name)
         
 def process_all_dataset(reprocess=True):
     """Create dgl graph datasets
@@ -348,7 +416,8 @@ def process_all_dataset(reprocess=True):
         reprocess (bool, optional): _description_. Defaults to False.
     """
     pretrain_dataset = [
-            'zinc_standard_agent',
+            # 'zinc_small',
+            'zinc_full',
             # 'chembl_filtered',
             ]
 
@@ -361,6 +430,7 @@ def process_all_dataset(reprocess=True):
             os.remove(root + "/processed/geometric_data_processed.pt")
         dataset = MoleculeDatasetG(root, dataset=dataset_name)
         print(f"G dataset loaded {dataset_name}")
+        print_stat(dataset,dataset_name)
         print(dataset)
 
         # convert to dgl graph
@@ -426,7 +496,7 @@ def process_all_dataset(reprocess=True):
         
         print(f'DGL dataset saved {dataset_name}')
         
-def load_dataset(name):
+def load_dataset(name,config):
     """
     Load dataset from pickle file
     Can be one of the following:
@@ -442,11 +512,28 @@ def load_dataset(name):
             'tox21',
             'toxcast',
             'chembl_filtered',
-            'zinc_standard_agent'
+            'zinc_small',
+            'zinc_full'
             ]
     """
+
+    assert name in ['bace',
+                    'bbbp',
+                    'clintox',
+                    'esol',
+                    'freesolv',
+                    'hiv',
+                    'lipophilicity',
+                    'muv',
+                    'sider',
+                    'tox21',
+                    'toxcast',
+                    'chembl_filtered',
+                    'zinc_small',
+                    'zinc_full'
+                    ]
     
-    return MoleculeDataset(name)
+    return MoleculeDataset(name,config['net_params']['pos_enc_dim'])
 
 # def preprocess_zinc():
 #     zinc_dataset = MoleculeDatasetDGL(name='ZINC-full')
