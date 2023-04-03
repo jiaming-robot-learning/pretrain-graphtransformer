@@ -25,11 +25,20 @@ from utils.dataset_pyg import MoleculeDatasetG, allowable_features
 
 from utils.metrics import MAE
 
+class MaskingGT(nn.Module):
+    def __init__(self,net_params) -> None:
+        super().__init__()
+        self.gt = GraphTransformerNet(net_params)
+        self.node_pred = nn.Linear(net_params['out_dim'], len(allowable_features['possible_atomic_num_list']))
+        self.criterion = nn.CrossEntropyLoss()
+    
+def compute_accuracy(pred, target):
+    return float(torch.sum(torch.max(pred.detach(), dim = 1)[1] == target).cpu().item())/len(pred)
+
 def train_epoch(model, optimizer, device, data_loader, epoch):
     model.train()
     epoch_loss = 0
-    epoch_train_mae = 0
-    nb_data = 0
+    acc_node_accum = 0
     for iter, (batch_graphs, batch_targets) in enumerate(data_loader):
         batch_graphs = batch_graphs.to(device)
         batch_x = batch_graphs.ndata['feat'].to(device)  # num x feat
@@ -44,17 +53,24 @@ def train_epoch(model, optimizer, device, data_loader, epoch):
         except:
             batch_lap_pos_enc = None
             
-        batch_scores = model.forward(batch_graphs, batch_x, batch_e, batch_lap_pos_enc, None)
-        loss = model.loss(batch_scores, batch_targets)
+        _ = model.gt(batch_graphs, batch_x, batch_e, batch_lap_pos_enc, None)
+        node_rep = batch_graphs.ndata['h']
+        ## loss for nodes
+        pred_node = model.node_pred(node_rep[batch_graphs.masked_atom_indices])
+        batch_graphs.mask_node_label = batch_graphs.mask_node_label.to(device)
+        loss = model.criterion(pred_node.double(), batch_graphs.mask_node_label)
+
+        acc_node = compute_accuracy(pred_node, batch_graphs.mask_node_label)
+        acc_node_accum += acc_node
+
         loss.backward()
         optimizer.step()
         epoch_loss += loss.detach().item()
-        epoch_train_mae += MAE(batch_scores, batch_targets)
-        nb_data += batch_targets.size(0)
+
     epoch_loss /= (iter + 1)
-    epoch_train_mae /= (iter + 1)
+    acc_node_accum /= (iter + 1)
     
-    return epoch_loss, epoch_train_mae, optimizer
+    return epoch_loss, acc_node_accum, optimizer
 def pretrain(dataset, params, net_params, out_dir, exp_name):
     """
     pretrain the model using specified dataset.
@@ -84,7 +100,7 @@ def pretrain(dataset, params, net_params, out_dir, exp_name):
     
     print("Training Graphs: ", len(trainset))
 
-    model = GraphTransformerNet(net_params)
+    model = MaskingGT(net_params)
     model = model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=params['init_lr'], weight_decay=params['weight_decay'])
@@ -94,7 +110,7 @@ def pretrain(dataset, params, net_params, out_dir, exp_name):
                                                      verbose=True)
     
     epoch_train_losses  = []
-    epoch_train_MAEs  = []
+    epoch_train_acces  = []
         
     train_loader = DataLoader(trainset, batch_size=params['batch_size'], num_workers=8, shuffle=True, collate_fn=dataset.collate)
     
@@ -105,18 +121,18 @@ def pretrain(dataset, params, net_params, out_dir, exp_name):
                 t.set_description('Epoch %d' % epoch)
                 start = time.time()
 
-                epoch_train_loss, epoch_train_mae, optimizer = train_epoch(model, optimizer, device, train_loader, epoch)
+                epoch_train_loss, epoch_train_acc, optimizer = train_epoch(model, optimizer, device, train_loader, epoch)
                     
                 epoch_train_losses.append(epoch_train_loss)
-                epoch_train_MAEs.append(epoch_train_mae)
+                epoch_train_acces.append(epoch_train_acc)
 
                 writer.add_scalar('train/_loss', epoch_train_loss, epoch)
-                writer.add_scalar('train/_mae', epoch_train_mae, epoch)
+                writer.add_scalar('train/_acc', epoch_train_acc, epoch)
                 writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], epoch)
                         
                 t.set_postfix(time=time.time()-start, lr=optimizer.param_groups[0]['lr'],
                               train_loss=epoch_train_loss, 
-                              train_MAE=epoch_train_mae)
+                              train_acc=epoch_train_acc)
                               
                 per_epoch_time.append(time.time()-start)
 
@@ -139,12 +155,6 @@ def pretrain(dataset, params, net_params, out_dir, exp_name):
                     print("\n!! LR EQUAL TO MIN LR SET.")
                     break
                 
-                # Stop training after params['max_time'] hours
-                if time.time()-t0 > params['max_time']*3600:
-                    print('-' * 89)
-                    print("Max_time for training elapsed {:.2f} hours, so stopping".format(params['max_time']))
-                    break
-                
     except KeyboardInterrupt:
         print('-' * 89)
         print('Exiting from training early because of KeyboardInterrupt')
@@ -155,11 +165,12 @@ def pretrain(dataset, params, net_params, out_dir, exp_name):
 
     writer.close()
 
+
 def main():    
    
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', help="Please give a config.json file with training/model/data/param details",
-                        default='config/pretrain_supervised.json')
+                        default='config/pretrain_masking.json')
     parser.add_argument('--gpu_id', help="Please give a value for gpu id")
     parser.add_argument('--dataset', help="Please give a value for dataset name",
                         default='zinc_small')
@@ -176,6 +187,7 @@ def main():
         config['gpu']['id'] = int(args.gpu_id)
         config['gpu']['use'] = True
     device = f'cuda:{config["gpu"]["id"]}' if config['gpu']['use'] else 'cpu'
+    # device = 'cpu'
   
     if args.dataset is not None:
         dataset_name = args.dataset
@@ -196,14 +208,13 @@ def main():
     net_params['device'] = device
     net_params['gpu_id'] = config['gpu']['id']
 
-    net_params['num_atom_type'] = len(allowable_features['possible_atomic_num_list'])  
+    net_params['num_atom_type'] = len(allowable_features['possible_atomic_num_list']) + 1 # +1 for masking 
     net_params['num_bond_type'] = len(allowable_features['possible_bonds'])  
 
     dataset = load_dataset(dataset_name,config)
     net_params['n_classes'] = dataset.train[0][1].shape[0] # set according to dataset label
 
-    exp_name = 'pretrain' +  "_" + dataset_name
-    exp_name = f'pretrain_supervised_{dataset_name}'
+    exp_name = f'pretrain_masking_{dataset_name}'
 
     if not os.path.exists(out_dir + 'results'):
         os.makedirs(out_dir + 'results')

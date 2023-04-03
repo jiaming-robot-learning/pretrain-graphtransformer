@@ -5,8 +5,10 @@
 import torch
 import torch.nn as nn
 import math
-
+import numpy as np
 from train.metrics import MAE
+
+from sklearn.metrics import roc_auc_score
 
 def train_epoch(model, optimizer, device, data_loader, epoch):
     model.train()
@@ -28,12 +30,7 @@ def train_epoch(model, optimizer, device, data_loader, epoch):
         except:
             batch_lap_pos_enc = None
             
-        try:
-            batch_wl_pos_enc = batch_graphs.ndata['wl_pos_enc'].to(device)
-        except:
-            batch_wl_pos_enc = None
-
-        batch_scores = model.forward(batch_graphs, batch_x, batch_e, batch_lap_pos_enc, batch_wl_pos_enc)
+        batch_scores = model.forward(batch_graphs, batch_x, batch_e, batch_lap_pos_enc, None)
         loss = model.loss(batch_scores, batch_targets)
         loss.backward()
         optimizer.step()
@@ -50,6 +47,7 @@ def evaluate_network(model, device, data_loader, epoch):
     epoch_test_loss = 0
     epoch_test_mae = 0
     nb_data = 0
+
     with torch.no_grad():
         for iter, (batch_graphs, batch_targets) in enumerate(data_loader):
             batch_graphs = batch_graphs.to(device)
@@ -71,6 +69,7 @@ def evaluate_network(model, device, data_loader, epoch):
             epoch_test_loss += loss.detach().item()
             epoch_test_mae += MAE(batch_scores, batch_targets)
             nb_data += batch_targets.size(0)
+
         epoch_test_loss /= (iter + 1)
         epoch_test_mae /= (iter + 1)
         

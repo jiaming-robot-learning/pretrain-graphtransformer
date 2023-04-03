@@ -57,6 +57,8 @@ class GraphTransformerNet(nn.Module):
 
         if self.n_classes is not None:
             self.MLP_layer = MLPReadout(out_dim, self.n_classes)
+        else:
+            self.MLP_layer = None
         
     def forward(self, g, h, e, h_lap_pos_enc=None, h_wl_pos_enc=None):
 

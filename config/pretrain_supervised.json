@@ -12,8 +12,8 @@
     "params": {
         "seed": 41,
         "epochs": 100,
-        "batch_size": 128,
-        "init_lr": 0.0007,
+        "batch_size": 256,
+        "init_lr": 0.001,
         "lr_reduce_factor": 0.5,
         "lr_schedule_patience": 15,
         "min_lr": 1e-6,

@@ -4,8 +4,8 @@ from typing import Dict
 from utils.dictionary import Dictionary
 
 def main():
-    process_all_dataset()
-    # print_stats_all_dataset()
+    # process_all_dataset()
+    print_stats_all_dataset()
 
 
 def load_dict():

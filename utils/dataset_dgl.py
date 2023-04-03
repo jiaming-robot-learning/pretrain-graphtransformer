@@ -1,6 +1,7 @@
 
-# adapted from
+# Part of code borrowed from 
 import torch
+import random
 import json
 import dill 
 import pickle
@@ -23,6 +24,8 @@ from utils.dataset_pyg import MoleculeDatasetG, allowable_features
 import threading
 from dgl.data.utils import save_graphs, load_graphs
 import matplotlib.pyplot as plt
+
+MASK_ID = len(allowable_features['possible_atomic_num_list'])
 
 def self_loop(g):
     """
@@ -48,7 +51,6 @@ def self_loop(g):
     # However, we need this for the generic requirement of ndata and edata
     new_g.edata['feat'] = torch.zeros(new_g.number_of_edges())
     return new_g
-
 
 def make_full_graph(g):
     """
@@ -162,7 +164,7 @@ class MoleculeDataset(torch.utils.data.Dataset):
     Args:
         torch (_type_): _description_
     """
-    def __init__(self, name, lap_dim=6):
+    def __init__(self, name, lap_dim=6, masking=None):
         """
             Loading ZINC dataset
         """
@@ -177,18 +179,7 @@ class MoleculeDataset(torch.utils.data.Dataset):
             datasets.append(d)
         
         self.train, self.val, self.test = datasets
-
-        # fname = 'dataset/' + name + '/processed/dataset_dgl.pickle'
-        # with open(fname, 'rb') as f:
-        #     dataset = pickle.load(f)
-        # # fname = f'dataset/{name}/processed/dataset_dgl.pickle'
-        # # with open(fname, "rb") as f:
-        # #     f = pickle.load(f)
-        #     self.train = dataset.train
-        #     self.val = dataset.val if dataset.val is not None else empty_dataset
-        #     self.test = dataset.test if dataset.test is not None else empty_dataset
-        #     self.num_atom_type = dataset.num_atom_type
-        #     self.num_bond_type = dataset.num_bond_type
+        self.masking = masking
         print('train, test, val sizes :',len(self.train),len(self.test),len(self.val))
         print("[I] Finished loading.")
         print("[I] Data load time: {:.4f}s".format(time.time()-start))
@@ -198,14 +189,41 @@ class MoleculeDataset(torch.utils.data.Dataset):
     def collate(self, samples):
         # The input samples is a list of pairs (graph, label).
         graphs, labels = map(list, zip(*samples))
-        # labels = torch.tensor(np.array(labels)).unsqueeze(1)
         labels = torch.stack(labels,dim=0)
-        # labels = torch.concat(labels).unsqueeze(1)
         batched_graph = dgl.batch(graphs)       
         
+        if self.masking:
+            batched_graph = self._mask_graph(batched_graph)
         return batched_graph, labels
     
     
+    def _mask_graph(self, batch_graph):
+        """
+        Random mask nodes in the graph
+        """
+        cumsum = 0
+        mask_node_labels_list = []
+        masked_atom_indices = []
+        for num_atoms in batch_graph.batch_num_nodes():
+            if num_atoms < 5:
+                continue
+            sample_size = int(num_atoms * self.masking + 1)
+            indices = random.sample(range(num_atoms), sample_size)
+            indices = [atom_idx + cumsum for atom_idx in indices]
+            masked_atom_indices.extend(indices)
+
+            # create mask node label by copying atom feature of mask atom
+            for atom_idx in indices:
+                mask_node_labels_list.append(batch_graph.ndata['feat'][atom_idx].item())
+                # modify the original node feature of the masked node
+                batch_graph.ndata['feat'][atom_idx] = torch.tensor(MASK_ID)
+                
+            cumsum += num_atoms
+
+        batch_graph.mask_node_label = torch.tensor(mask_node_labels_list)
+        batch_graph.masked_atom_indices = torch.tensor(masked_atom_indices)
+        return batch_graph
+            
     def _add_self_loops(self):
         
         # function for adding self loops
@@ -294,14 +312,12 @@ class MoleculeDGL(torch.utils.data.Dataset):
                 g.ndata['feat'] = node_features
 
                 g.add_edges(molecule.edge_index[0,:], molecule.edge_index[1,:])
-                # for i in range(molecule.edge_index.shape[1]):
-                #     g.add_edges(molecule.edge_index[0,i].item(), molecule.edge_index[1,i].item())
+                g.add_edges(molecule.edge_index[0,i].item(), molecule.edge_index[1,i].item())
 
                 g.edata['feat'] = edge_features
             
                 graph_list[idx] = g
                 label_list[idx] = molecule.y
-                
                 
         threads = [threading.Thread(target=_prepare_thread, args=(self.data,index[i],graph_list,label_list)) for i in range(self.n_thread)]
         for thread in threads:
@@ -336,24 +352,6 @@ class MoleculeDGL(torch.utils.data.Dataset):
         self.graph_lists[idx] = g
         return g, self.graph_labels[idx]
 
-# class MoleculeDatasetDGL(object):
-#     """This class is used to save the dataset in a pickle file
-
-#     Args:
-#         object (_type_): _description_
-#     """
-#     def __init__(self, name, train_data, val_data, test_data):
-        
-#         self.name = name
-        
-#         self.num_atom_type = len(allowable_features['possible_atomic_num_list'])  # 28 # known meta-info about the zinc dataset; can be calculated as well
-#         self.num_bond_type = len(allowable_features['possible_bonds'])  # 4 # known meta-info about the zinc dataset; can be calculated as well
-        
-#         self.train = train_data
-#         self.val = val_data
-#         self.test = test_data
-        
-
 def print_stat(dataset,name):
     n_nodes = []
     
@@ -374,6 +372,7 @@ def print_stat(dataset,name):
         'avg_n_nodes': avg_n,
         'n_graphs': len(dataset),
     }
+    os.makedirs('out/dataset_stats', exist_ok=True)
     with open(f'out/dataset_stats/stats_{name}.json', 'w') as f:
         json.dump(stats, f)
 
@@ -409,7 +408,7 @@ def print_stats_all_dataset():
         print(f"G dataset loaded {dataset_name}")
         print_stat(dataset,dataset_name)
         
-def process_all_dataset(reprocess=True):
+def process_all_dataset(reprocess=False):
     """Create dgl graph datasets
 
     Args:
@@ -533,7 +532,7 @@ def load_dataset(name,config):
                     'zinc_full'
                     ]
     
-    return MoleculeDataset(name,config['net_params']['pos_enc_dim'])
+    return MoleculeDataset(name,config['net_params']['pos_enc_dim'],config.get('masking_ratio',None))
 
 # def preprocess_zinc():
 #     zinc_dataset = MoleculeDatasetDGL(name='ZINC-full')
