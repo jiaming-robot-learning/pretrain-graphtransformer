@@ -11,6 +11,13 @@ import networkx as nx
 from rdkit import Chem
 from rdkit.Chem import Descriptors
 from rdkit.Chem import AllChem
+from rdkit.Chem import RDConfig
+import os
+import sys
+sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
+# now you can import sascore!
+import sascorer
+
 from rdkit import DataStructs
 from rdkit.Chem.rdMolDescriptors import GetMorganFingerprintAsBitVect
 from torch.utils import data
@@ -330,7 +337,7 @@ class MoleculeDatasetG(InMemoryDataset):
             input_df = pd.read_csv(input_path, sep=',', compression='gzip',
                                    dtype='str')
             zinc_id_list = list(input_df['zinc_id'])
-            smiles_list = list(input_df['smiles'])
+            smiles_list = list(input_df['smiles'])[:1000000] # let's use half
             logp = input_df.logp.astype(float)
             normalized_logp = (logp - logp.min())/(logp.max() - logp.min())
             # dqd = input_df.qed
@@ -347,8 +354,10 @@ class MoleculeDatasetG(InMemoryDataset):
                         # Chem.SanitizeMol(rdkit_mol,
                         #                  sanitizeOps=Chem.SanitizeFlags.SANITIZE_KEKULIZE)
                         data = mol_to_graph_data_obj_simple(rdkit_mol)
+                        qed = Chem.QED.qed(rdkit_mol)
+                        sas = sascorer.calculateScore(rdkit_mol)
                         # data.y = torch.tensor([normalized_logp[i],dqd[i],sas[i]])
-                        data.y = torch.tensor([normalized_logp[i]])
+                        data.y = torch.tensor([normalized_logp[i], qed, sas])
                         # manually add mol id
                         id = int(zinc_id_list[i].split('ZINC')[1].lstrip('0'))
                         data.id = torch.tensor(
@@ -409,6 +418,13 @@ class MoleculeDatasetG(InMemoryDataset):
                 _load_chembl_with_labels_dataset(os.path.join(self.root, 'raw'))
 
             print('processing')
+            names = [] # total len 208
+            ori_label_len = labels.shape[1]
+            for j, (name, fn) in enumerate(Descriptors.descList):
+                names.append(f'{j+ori_label_len}\t{name}\n')
+            with open(f'{self.root}/chembl_properties.csv', 'w') as f:
+                f.writelines(names)
+            logp_list = []
             for i in range(len(rdkit_mol_objs)):
                 print(i)
                 rdkit_mol = rdkit_mol_objs[i]
@@ -425,7 +441,24 @@ class MoleculeDatasetG(InMemoryDataset):
                             data.id = torch.tensor(
                                 [i])  # id here is the index of the mol in
                             # the dataset
-                            data.y = torch.tensor(labels[i, :])
+                            
+                            #### create synthetic labels
+                            # logp = Chem.Crippen.MolLogP(rdkit_mol_objs[i])
+                            # n_rings = Chem.rdMolDescriptors.CalcNumRings(rdkit_mol_objs[i])
+                            # tpsa = Descriptors.TPSA(rdkit_mol_objs[0])
+                            
+                            properties = [] # total len 208
+                            for j, (name, fn) in enumerate(Descriptors.descList):
+                                properties.append(fn(rdkit_mol_objs[i]))
+                            logp_list.append(properties[1431-ori_label_len])
+                            qed = Chem.QED.qed(rdkit_mol_objs[i])
+                            sas = sascorer.calculateScore(rdkit_mol_objs[i])
+                            properties.append(qed)
+                            properties.append(sas)
+                            properties = np.array(properties)
+                            ################################
+                            
+                            data.y = torch.tensor(np.concatenate([labels[i, :], properties,np.array([0])])) # 0 for normalized logp
                             # fold information
                             if i in folds[0]:
                                 data.fold = torch.tensor([0])
@@ -436,6 +469,11 @@ class MoleculeDatasetG(InMemoryDataset):
                             data_list.append(data)
                             data_smiles_list.append(smiles_list[i])
 
+            logp_list = np.array(logp_list)
+            normalized_logp = (logp_list - np.min(logp_list)) / (np.max(logp_list) - np.min(logp_list))
+            for i in range(len(data_list)):
+                data_list[i].y[-1] = normalized_logp[i]
+                
         elif self.dataset == 'tox21':
             smiles_list, rdkit_mol_objs, labels = \
                 _load_tox21_dataset(self.raw_paths[0])

@@ -6,6 +6,7 @@
     
     "model": "GraphTransformer",
     "dataset": "ZINC",
+    "max_num_graphs": 1000000, 
     
     "out_dir": "out/",
     
@@ -23,10 +24,10 @@
     },
     
     "net_params": {
-        "L": 10,
+        "L": 5,
         "n_heads": 8,
-        "hidden_dim": 64,
-        "out_dim": 64,
+        "hidden_dim": 304,
+        "out_dim": 304,
         "edge_feat": true,
         "residual": true,
         "readout": "mean",

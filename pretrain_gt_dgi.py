@@ -23,22 +23,38 @@ from net.graph_transformer_net import GraphTransformerNet
 from utils.dataset_dgl import load_dataset
 from utils.dataset_pyg import MoleculeDatasetG, allowable_features
 
-from utils.metrics import MAE
+class Critic(nn.Module):
+    def __init__(self, hidden_dim):
+        super().__init__()
+        self.linear = nn.Linear(hidden_dim,hidden_dim,bias=False)
 
-class MaskingGT(nn.Module):
-    def __init__(self,net_params) -> None:
+    def forward(self, node_ft, graph_ft):
+        h = self.linear(graph_ft)
+        return torch.sum(node_ft*h, dim = 1)
+
+class DGI(nn.Module):
+    def __init__(self, net_params):
         super().__init__()
         self.gt = GraphTransformerNet(net_params)
-        self.node_pred = nn.Linear(net_params['out_dim'], len(allowable_features['possible_atomic_num_list']))
-        self.criterion = nn.CrossEntropyLoss()
-    
-def compute_accuracy(pred, target):
-    return float(torch.sum(torch.max(pred.detach(), dim = 1)[1] == target).cpu().item())/len(pred)
+        self.critic = Critic(net_params['out_dim'])
+        self.criterion = nn.BCEWithLogitsLoss()
 
-def train_epoch(model, optimizer, device, data_loader, epoch,sup_ratio):
+def cycle_index(num, shift):
+    arr = torch.arange(num) + shift
+    arr[-shift:] = torch.arange(shift)
+    return arr
+    
+# def compute_accuracy(pred, target):
+#     return float(torch.sum(torch.max(pred.detach(), dim = 1)[1] == target).cpu().item())/len(pred)
+def batch_idx_from_batch_num_nodes(batch_num_nodes):
+    batch_idx = []
+    for i in range(len(batch_num_nodes)):
+        batch_idx.extend([i] * batch_num_nodes[i])
+    return batch_idx
+
+def train_epoch(model, optimizer, device, data_loader, epoch, sup_ratio):
     model.train()
     epoch_loss = 0
-    acc_node_accum = 0
     for iter, (batch_graphs, batch_targets) in enumerate(data_loader):
         batch_graphs = batch_graphs.to(device)
         batch_x = batch_graphs.ndata['feat'].to(device)  # num x feat
@@ -52,37 +68,40 @@ def train_epoch(model, optimizer, device, data_loader, epoch,sup_ratio):
             batch_lap_pos_enc = batch_lap_pos_enc * sign_flip.unsqueeze(0)
         except:
             batch_lap_pos_enc = None
-            
+
         out = model.gt(batch_graphs, batch_x, batch_e, batch_lap_pos_enc, None)
         batch_scores = out['scores']
-        node_rep = batch_graphs.ndata['h']
-        ## loss for nodes
-        pred_node = model.node_pred(node_rep[batch_graphs.masked_atom_indices])
-        batch_graphs.mask_node_label = batch_graphs.mask_node_label.to(device)
-        loss = model.criterion(pred_node.double(), batch_graphs.mask_node_label)
+        graph_ft = out['hg']
+        node_ft = batch_graphs.ndata['h']
+        batch_graphs.batch = batch_idx_from_batch_num_nodes(batch_graphs.batch_num_nodes())
+        
+        positive_expanded_graph_ft = graph_ft[batch_graphs.batch]
 
-        acc_node = compute_accuracy(pred_node, batch_graphs.mask_node_label)
-        acc_node_accum += acc_node
+        shifted_graph_ft = graph_ft[cycle_index(len(graph_ft), 1)]
+        negative_expanded_graph_ft = shifted_graph_ft[batch_graphs.batch]
+
+        positive_score = model.critic(node_ft, positive_expanded_graph_ft)
+        negative_score = model.critic(node_ft, negative_expanded_graph_ft)      
+
+        loss = model.criterion(positive_score, torch.ones_like(positive_score)) + model.criterion(negative_score, torch.zeros_like(negative_score))
 
         # sup loss
         if sup_ratio > 0:
             sup_loss = model.gt.loss(batch_scores, batch_targets)
             loss += sup_loss * sup_ratio
-
+        
         loss.backward()
         optimizer.step()
         epoch_loss += loss.detach().item()
 
     epoch_loss /= (iter + 1)
-    acc_node_accum /= (iter + 1)
     
-    return epoch_loss, acc_node_accum, optimizer
+    return epoch_loss, optimizer
 def pretrain(dataset, params, config, out_dir, exp_name):
     """
     pretrain the model using specified dataset.
     We don't use the validation set here, because we evaluate the model on the downstream task.
     """
-
     net_params = config['net_params']
     t0 = time.time()
     per_epoch_time = []
@@ -107,7 +126,7 @@ def pretrain(dataset, params, config, out_dir, exp_name):
     
     print("Training Graphs: ", len(trainset))
 
-    model = MaskingGT(net_params)
+    model = DGI(net_params)
     model = model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=params['init_lr'], weight_decay=params['weight_decay'])
@@ -128,18 +147,16 @@ def pretrain(dataset, params, config, out_dir, exp_name):
                 t.set_description('Epoch %d' % epoch)
                 start = time.time()
 
-                epoch_train_loss, epoch_train_acc, optimizer = train_epoch(model, optimizer, device, train_loader, epoch,config['sup_ratio'])
+                epoch_train_loss,  optimizer = train_epoch(model, optimizer, device, train_loader, epoch,config['sup_ratio'])
                     
                 epoch_train_losses.append(epoch_train_loss)
-                epoch_train_acces.append(epoch_train_acc)
 
                 writer.add_scalar('train/_loss', epoch_train_loss, epoch)
-                writer.add_scalar('train/_acc', epoch_train_acc, epoch)
                 writer.add_scalar('learning_rate', optimizer.param_groups[0]['lr'], epoch)
                         
                 t.set_postfix(time=time.time()-start, lr=optimizer.param_groups[0]['lr'],
-                              train_loss=epoch_train_loss, 
-                              train_acc=epoch_train_acc)
+                              train_loss=epoch_train_loss 
+                              )
                               
                 per_epoch_time.append(time.time()-start)
 
@@ -177,7 +194,7 @@ def main():
    
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', help="Please give a config.json file with training/model/data/param details",
-                        default='config/pretrain_masking.json')
+                        default='config/pretrain_dgi.json')
     parser.add_argument('--gpu_id', help="Please give a value for gpu id")
     parser.add_argument('--dataset', help="Please give a value for dataset name",
                         default='bbbp')
@@ -217,15 +234,15 @@ def main():
     config['net_params']['gpu_id'] = config['gpu']['id']
     config['net_params']['num_atom_type'] = len(allowable_features['possible_atomic_num_list']) + 1 # +1 for masking 
     config['net_params']['num_bond_type'] = len(allowable_features['possible_bonds'])  
-    config['sup_ratio'] = float(args.sup_ratio)
 
+    config['sup_ratio'] = float(args.sup_ratio)
     dataset = load_dataset(dataset_name,config)
     config['net_params']['n_classes'] = dataset.train[0][1].shape[0] # set according to dataset label
 
     if args.exp_name is not None:
         exp_name = args.exp_name
     else:
-        exp_name = f'pretrain_masking_{dataset_name}'
+        exp_name = f'pretrain_dgi_{dataset_name}'
 
     if not os.path.exists(out_dir + 'results'):
         os.makedirs(out_dir + 'results')

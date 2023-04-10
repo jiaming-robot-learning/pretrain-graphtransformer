@@ -5,11 +5,11 @@
     },
     
     "model": "GraphTransformer",
-    "dataset": "ZINC",
-    "masking_ratio": 0.15,
+    "dataset": "chembl_filtered",
+    "label_idx_list": [-1,-2,-3],
+    "_comment": "labels includes: normalized logp:-1, sas:-2, qed:-3 ",
     
     "out_dir": "out/",
-    "sup_ratio": 0,
     
     "params": {
         "seed": 41,

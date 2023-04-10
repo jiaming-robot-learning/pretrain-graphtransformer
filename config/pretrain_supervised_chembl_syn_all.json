@@ -5,11 +5,11 @@
     },
     
     "model": "GraphTransformer",
-    "dataset": "ZINC",
-    "masking_ratio": 0.15,
+    "dataset": "ZINCchembl_filtered",
+    "label_idx_start": 1310,
+    "_comment": "labels includes: all calculated properties https://www.rdkit.org/docs/GettingStartedInPython.html#list-of-available-descriptors ",
     
     "out_dir": "out/",
-    "sup_ratio": 0,
     
     "params": {
         "seed": 41,

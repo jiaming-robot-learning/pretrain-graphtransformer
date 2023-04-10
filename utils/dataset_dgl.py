@@ -164,22 +164,22 @@ class MoleculeDataset(torch.utils.data.Dataset):
     Args:
         torch (_type_): _description_
     """
-    def __init__(self, name, lap_dim=6, masking=None):
+    def __init__(self, name, config ):
         """
             Loading ZINC dataset
         """
+
         start = time.time()
         print("[I] Loading dataset %s..." % (name))
         self.name = name
-        empty_dataset = MoleculeDGL()
         datasets = []
         for split in ['train','val','test']:
-            d = MoleculeDGL(pe_dim=lap_dim)
+            d = MoleculeDGL(config=config)
             d.load(name,split)
             datasets.append(d)
         
         self.train, self.val, self.test = datasets
-        self.masking = masking
+        self.masking = config.get('masking_ratio',None)
         print('train, test, val sizes :',len(self.train),len(self.test),len(self.val))
         print("[I] Finished loading.")
         print("[I] Data load time: {:.4f}s".format(time.time()-start))
@@ -263,11 +263,16 @@ class MoleculeDGL(torch.utils.data.Dataset):
     Args:
         torch (_type_): _description_
     """
-    def __init__(self, data=None,n_thread=10,pe_dim=6):
+    def __init__(self, data=None, config=None, n_thread=10):
         
         self.graph_lists = []
         self.graph_labels = []
-        self.pe_dim = pe_dim
+        if config is not None:
+            self.pe_dim = config['net_params']['pos_enc_dim']
+            self.label_idx_list = config.get('label_idx_list',None)
+            self.label_idx_start = config.get('label_idx_start',None)
+            self.label_idx_end = config.get('label_idx_end',None)
+            self.max_num_graphs = config.get('max_num_graphs',None)
 
         if data is not None:
             self.data = data
@@ -286,10 +291,17 @@ class MoleculeDGL(torch.utils.data.Dataset):
         if os.path.exists(fname):
             print(f'Loading dataset from {fname}...')
             self.graph_lists, self.graph_labels = load_graphs(f'dataset/{name}/processed/dataset_dgl_{split}.pkl')
+
+                
             if bool(self.graph_labels):
                 self.graph_labels = list(self.graph_labels['glabel'])
             else:
                 self.graph_labels = []
+
+            # limit the max size
+            if self.max_num_graphs is not None:
+                self.graph_lists = self.graph_lists[:self.max_num_graphs]
+                self.graph_labels = self.graph_labels[:self.max_num_graphs]
 
         else:
             print(f'File {fname} doesnot exist. Init empty dataset instead.')
@@ -312,7 +324,6 @@ class MoleculeDGL(torch.utils.data.Dataset):
                 g.ndata['feat'] = node_features
 
                 g.add_edges(molecule.edge_index[0,:], molecule.edge_index[1,:])
-                g.add_edges(molecule.edge_index[0,i].item(), molecule.edge_index[1,i].item())
 
                 g.edata['feat'] = edge_features
             
@@ -350,18 +361,34 @@ class MoleculeDGL(torch.utils.data.Dataset):
         if 'lap_pos_enc' not in g.ndata:
             g = laplacian_positional_encoding(g, self.pe_dim)
         self.graph_lists[idx] = g
+
+        if self.label_idx_start is not None and self.label_idx_end is not None:
+            return g, self.graph_labels[idx][self.label_idx_start:self.label_idx_end]
+        if self.label_idx_start is not None:
+            return g, self.graph_labels[idx][self.label_idx_start:]
+        if self.label_idx_end is not None:
+            return g, self.graph_labels[idx][:self.label_idx_end]
+        if self.label_idx_list is not None:
+            return g, self.graph_labels[idx][self.label_idx_list]
         return g, self.graph_labels[idx]
 
 def print_stat(dataset,name):
     n_nodes = []
+    n_edges = []
+    atom_dist = np.zeros(len(allowable_features['possible_atomic_num_list']))
     
-    for i in range(len(dataset)):
+    for i in range(min(1000000,len(dataset))):
         n_nodes.append(dataset[i].x.shape[0])
+        n_edges.append(dataset[i].edge_index.shape[1])
+        atom_dist += np.bincount(dataset[i].x[:,0].numpy().astype(int), minlength=len(allowable_features['possible_atomic_num_list']))
     
+    atom_dist = atom_dist / np.sum(atom_dist)
     n_nodes = np.array(n_nodes)
+    n_edges = np.array(n_edges)
     min_n = int(np.min(n_nodes))
     max_n = int(np.max(n_nodes))
     avg_n = int(np.mean(n_nodes))
+    avg_e = int(np.mean(n_edges))
     
     n_class = dataset[0].y.shape[0] if dataset[0].y is not None else 0
     stats = {
@@ -370,7 +397,9 @@ def print_stat(dataset,name):
         'min_n_nodes': min_n,
         'max_n_nodes': max_n,
         'avg_n_nodes': avg_n,
+        'avg_n_edges': avg_e,
         'n_graphs': len(dataset),
+        'atom_dist': atom_dist.tolist(),
     }
     os.makedirs('out/dataset_stats', exist_ok=True)
     with open(f'out/dataset_stats/stats_{name}.json', 'w') as f:
@@ -384,10 +413,11 @@ def print_stat(dataset,name):
         
 def print_stats_all_dataset():
     datasets = [
+            'sider',
+            'bace',
             'zinc_small',
             'zinc_full',
             'chembl_filtered',
-            'bace',
             'bbbp',
             'clintox',
             'esol',
@@ -395,7 +425,6 @@ def print_stats_all_dataset():
             'hiv',
             'lipophilicity',
             'muv',
-            'sider',
             'tox21',
             'toxcast',
     ]
@@ -408,6 +437,26 @@ def print_stats_all_dataset():
         print(f"G dataset loaded {dataset_name}")
         print_stat(dataset,dataset_name)
         
+    # calculate Hellinger distance between atom distributions
+    _SQRT2 = np.sqrt(2)     # sqrt(2) with default precision np.float64
+
+    def hellinger(p, q):
+        return np.sqrt(np.sum((np.sqrt(p) - np.sqrt(q)) ** 2)) / _SQRT2
+
+    atom_dist = []
+    all_dist = {}
+    for dataset_name in datasets:
+        with open(f'out/dataset_stats/stats_{dataset_name}.json', 'r') as f:
+            stats = json.load(f)
+        atom_dist.append(stats['atom_dist'])
+    for dist1, name1 in zip(atom_dist, datasets):
+        for dist2, name2 in zip(atom_dist, datasets):
+            hd = hellinger(dist1, dist2)
+            all_dist[f'{name1}-{name2}'] = hd
+            print(f"{name1}-{name2}: {hd}")
+            
+    with open(f'out/dataset_stats/hellinger_dist.json', 'w') as f:
+        json.dump(all_dist, f)
 def process_all_dataset(reprocess=False):
     """Create dgl graph datasets
 
@@ -415,9 +464,9 @@ def process_all_dataset(reprocess=False):
         reprocess (bool, optional): _description_. Defaults to False.
     """
     pretrain_dataset = [
+            # 'chembl_filtered',
             # 'zinc_small',
             'zinc_full',
-            # 'chembl_filtered',
             ]
 
     for dataset_name in pretrain_dataset:
@@ -436,11 +485,6 @@ def process_all_dataset(reprocess=False):
         dataset_dgl_train = MoleculeDGL(dataset)
         dataset_dgl_train.save(dataset_name,'train')
 
-        # # save dgl graph
-        # dataset_dgl_all = MoleculeDatasetDGL(dataset_name, dataset_dgl_train,None,None)
-        # with open(root + "/processed/dataset_dgl.pickle", 'wb') as f:
-        #     pickle.dump(dataset_dgl_all, f,protocol=pickle.HIGHEST_PROTOCOL)
-        
     downstream_dir = [
             # 'bace',
             # 'bbbp',
@@ -485,14 +529,6 @@ def process_all_dataset(reprocess=False):
         print(f'test dataset converted to DGL')
         dataset_dgl_test.save(dataset_name,'test')
         
-        # create DGL dataset and save
-        # dataset_dgl_all = MoleculeDatasetDGL(dataset_name, dataset_dgl_train, dataset_dgl_val, dataset_dgl_test)
-        # with open(root + "/processed/dataset_dgl.pickle", 'wb') as f:
-        #     s = pickle.dumps(dataset_dgl_all,protocol=pickle.HIGHEST_PROTOCOL)
-        #     # pickle.dump(dataset_dgl_all, f,protocol=pickle.HIGHEST_PROTOCOL)
-        #     f.write(s)
-            
-        
         print(f'DGL dataset saved {dataset_name}')
         
 def load_dataset(name,config):
@@ -532,10 +568,5 @@ def load_dataset(name,config):
                     'zinc_full'
                     ]
     
-    return MoleculeDataset(name,config['net_params']['pos_enc_dim'],config.get('masking_ratio',None))
+    return MoleculeDataset(name,config)
 
-# def preprocess_zinc():
-#     zinc_dataset = MoleculeDatasetDGL(name='ZINC-full')
-#     with open('dataset/zinc_geometric/processed/zinc_dataset_full.pickle', 'wb') as f:
-#         pickle.dump(zinc_dataset, f)
-#     print("Zinc dataset is ready!")

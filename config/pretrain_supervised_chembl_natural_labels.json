@@ -5,11 +5,12 @@
     },
     
     "model": "GraphTransformer",
-    "dataset": "ZINC",
-    "masking_ratio": 0.15,
+    "dataset": "chembl_filtered",
     
+    "label_idx_end": 1310,
+    "_comment": "labels includes: all natual labels ",
+
     "out_dir": "out/",
-    "sup_ratio": 0,
     
     "params": {
         "seed": 41,
@@ -40,6 +41,7 @@
         "lap_pos_enc": true,
         "pos_enc_dim": 5, 
         "wl_pos_enc": false,
-        "full_graph": false
+        "full_graph": false,
+        "loss_type": "bce"
     }
 }

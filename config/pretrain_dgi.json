@@ -6,7 +6,7 @@
     
     "model": "GraphTransformer",
     "dataset": "ZINC",
-    "masking_ratio": 0.15,
+    "max_num_graphs": 1000000, 
     
     "out_dir": "out/",
     "sup_ratio": 0,

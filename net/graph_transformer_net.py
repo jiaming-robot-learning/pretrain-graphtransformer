@@ -33,6 +33,16 @@ class GraphTransformerNet(nn.Module):
         self.lap_pos_enc = net_params['lap_pos_enc']
         self.wl_pos_enc = net_params['wl_pos_enc']
         self.n_classes = net_params.get('n_classes',None)
+        self.loss_type = net_params.get('loss_type','l1')
+        
+        if self.loss_type == 'l1':
+            self.loss_fn = nn.L1Loss()
+        elif self.loss_type == 'l2':
+            self.loss_fn = nn.MSELoss()
+        elif self.loss_type == 'bce': # this is for chembl natural targets
+            self.loss_fn = nn.BCEWithLogitsLoss(reduction = "none")
+        else:
+            raise ValueError('loss type not supported')
         
         max_wl_role_index = 37 # this is maximum graph size in the dataset
         
@@ -89,13 +99,29 @@ class GraphTransformerNet(nn.Module):
         else:
             hg = dgl.mean_nodes(g, 'h')  # default readout is mean nodes
             
+        out = {'hg': hg}
         if self.n_classes is not None:
-            return self.MLP_layer(hg)
-        else:
-            return hg
+            out['scores'] = self.MLP_layer(hg)
+
+        return out
         
     def loss(self, scores, targets):
-        # loss = nn.MSELoss()(scores,targets)
-        loss = nn.L1Loss()(scores, targets)
+
+        if self.loss_type == 'l1':
+            loss = self.loss_fn(scores, targets)
+        
+        elif self.loss_type == 'bce':
+            targets = targets.view(scores.shape)
+            #Whether y is non-null or not.
+            is_valid = targets**2 > 0
+            #Loss matrix
+            loss_mat = self.loss_fn(scores.double(), (targets+1)/2) # targets are -1,1
+            #loss matrix after removing null target
+            loss_mat = torch.where(is_valid, loss_mat, torch.zeros(loss_mat.shape).to(loss_mat.device).to(loss_mat.dtype))
+            loss = torch.sum(loss_mat)/torch.sum(is_valid)
+        
+        else:
+            raise ValueError('loss type not supported')
+
         return loss
 

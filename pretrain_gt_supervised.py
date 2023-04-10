@@ -1,6 +1,7 @@
 
 import dgl
 
+from net.mlp_readout_layer import MLPReadout
 import numpy as np
 import os
 import socket
@@ -44,7 +45,8 @@ def train_epoch(model, optimizer, device, data_loader, epoch):
         except:
             batch_lap_pos_enc = None
             
-        batch_scores = model.forward(batch_graphs, batch_x, batch_e, batch_lap_pos_enc, None)
+        out = model.forward(batch_graphs, batch_x, batch_e, batch_lap_pos_enc, None)
+        batch_scores = out['scores']
         loss = model.loss(batch_scores, batch_targets)
         loss.backward()
         optimizer.step()
@@ -55,7 +57,7 @@ def train_epoch(model, optimizer, device, data_loader, epoch):
     epoch_train_mae /= (iter + 1)
     
     return epoch_loss, epoch_train_mae, optimizer
-def pretrain(dataset, params, net_params, out_dir, exp_name):
+def pretrain(model,dataset, params, net_params, out_dir, exp_name):
     """
     pretrain the model using specified dataset.
     We don't use the validation set here, because we evaluate the model on the downstream task.
@@ -84,7 +86,6 @@ def pretrain(dataset, params, net_params, out_dir, exp_name):
     
     print("Training Graphs: ", len(trainset))
 
-    model = GraphTransformerNet(net_params)
     model = model.to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=params['init_lr'], weight_decay=params['weight_decay'])
@@ -155,6 +156,29 @@ def pretrain(dataset, params, net_params, out_dir, exp_name):
 
     writer.close()
 
+def load_weights(ckpt_path, net_params,model):
+    """load pretrained model, and change the last layer to match the number of classes in the dataset
+
+    Args:
+        ckpt_path (_type_): _description_
+        n_class (_type_): _description_
+    """
+    if ckpt_path is not None and os.path.isfile(ckpt_path):
+        print("=> loading checkpoint '{}'".format(ckpt_path))
+        checkpoint = torch.load(ckpt_path)
+        # igore the MLP layer
+        filtered_dict = {k: v for k, v in checkpoint.items() if k.find('MLP_layer') == -1}
+        model.load_state_dict(filtered_dict,strict=False)
+        print("=> loaded checkpoint '{}'".format(ckpt_path))
+    else:
+        print("=> no checkpoint loaded. using random initialization")
+
+    n_class = net_params.get('n_classes',None)
+    out_dim = net_params['out_dim']
+
+    model.MLP_layer = MLPReadout(out_dim, n_class)
+    
+    return model
 def main():    
    
     parser = argparse.ArgumentParser()
@@ -162,10 +186,12 @@ def main():
                         default='config/pretrain_supervised.json')
     parser.add_argument('--gpu_id', help="Please give a value for gpu id")
     parser.add_argument('--dataset', help="Please give a value for dataset name",
-                        default='zinc_small')
+                        default='zinc_full')
     parser.add_argument('--out_dir', help="Please give a value for out_dir",default='out/')
     parser.add_argument('--seed', help="Please give a value for seed")
     parser.add_argument('--epochs', help="Please give a value for epochs")
+    parser.add_argument('--exp_name', help="Please give a value for exp_name")
+    parser.add_argument('--ckpt', help="Please give a value for ckpt")
 
 
     args = parser.parse_args()
@@ -202,8 +228,10 @@ def main():
     dataset = load_dataset(dataset_name,config)
     net_params['n_classes'] = dataset.train[0][1].shape[0] # set according to dataset label
 
-    exp_name = 'pretrain' +  "_" + dataset_name
-    exp_name = f'pretrain_supervised_{dataset_name}'
+    if args.exp_name is not None:
+        exp_name = args.exp_name
+    else:
+        exp_name = f'pretrain_supervised_{dataset_name}'
 
     if not os.path.exists(out_dir + 'results'):
         os.makedirs(out_dir + 'results')
@@ -214,7 +242,20 @@ def main():
     if not os.path.exists(out_dir + 'checkpoints'):
         os.makedirs(out_dir + 'checkpoints')
 
-    pretrain(dataset, params, net_params, out_dir, exp_name)
+    model = GraphTransformerNet(net_params)
+    if args.ckpt is not None:
+        
+        ckpt_dir = f'{out_dir}/checkpoints/{args.ckpt}'
+        if args.ckpt != '' and os.path.exists(ckpt_dir):
+            print(f'Loading checkpoint from {ckpt_dir}')
+            os.listdir(ckpt_dir)
+            list_of_files = sorted( filter( lambda x: os.path.isfile(os.path.join(ckpt_dir, x)),
+                            os.listdir(ckpt_dir) ) )
+            ckpt_path = ckpt_dir + '/' + list_of_files[-1]
+    
+        model = load_weights(ckpt_path,net_params,model)
+
+    pretrain(model, dataset, params, net_params, out_dir, exp_name)
     
     
 main()    
