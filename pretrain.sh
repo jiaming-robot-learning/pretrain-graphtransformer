@@ -32,19 +32,27 @@
 
 
 ##### unsup + sup
-python pretrain_gt_dgi.py --config config/pretrain_dgi.json --exp_name pretrain_dgisup05_zinc_small --dataset zinc_small --gpu_id 2 --sup_ratio 0.5
-python pretrain_gt_dgi.py --config config/pretrain_dgi.json --exp_name pretrain_dgisup1_zinc_small --dataset zinc_small --gpu_id 2 --sup_ratio 1
-python pretrain_gt_dgi.py --config config/pretrain_dgi.json --exp_name pretrain_dgisup2_zinc_small --dataset zinc_small --gpu_id 2 --sup_ratio 2
+# python pretrain_gt_dgi.py --config config/pretrain_dgi.json --exp_name pretrain_dgisup05_zinc_small --dataset zinc_small --gpu_id 2 --sup_ratio 0.5
+# python pretrain_gt_dgi.py --config config/pretrain_dgi.json --exp_name pretrain_dgisup1_zinc_small --dataset zinc_small --gpu_id 2 --sup_ratio 1
+# python pretrain_gt_dgi.py --config config/pretrain_dgi.json --exp_name pretrain_dgisup2_zinc_small --dataset zinc_small --gpu_id 2 --sup_ratio 2
 
 
-###### unsup + supervised
+###### gin
+# python pretrain_gin_supervised.py --config config/pretrain_supervised.json --exp_name pretrain_gin_supervised_zinc_small --dataset zinc_small --gpu_id 3
+
+# python pretrain_gin_supervised.py --config config/pretrain_supervised.json --exp_name pretrain_gin_supervised_zinc_full --dataset zinc_full --gpu_id 3
 
 
-################
-# compare supervised_zinc_small vs supervised_zinc_full: does size matter?
+# python pretrain_gin_supervised.py --config config/pretrain_supervised_chembl_natural_labels.json --exp_name pretrain_gin_supervised_chembl_natural_labels --dataset chembl_filtered --gpu_id 3
 
-# compare supervised_chembl_natural vs supervised_chembl_selected(plus/logp): what labels best?
+# # gin unsup
+# python pretrain_gin_masking.py --config config/pretrain_masking.json --exp_name pretrain_gin_masking_zinc_full --dataset zinc_full --gpu_id 3
 
-# compare supervised_chembl_selected vs supervised_zinc_small: atom distribution matters?
+# # then sup using chembl labels
+# python pretrain_gin_supervised.py --config config/pretrain_supervised_chembl_natural_labels.json --exp_name pretrain_gin_masking_zincfull_supervised_chembl --dataset chembl_filtered --gpu_id 3 --ckpt pretrain_gin_masking_zinc_full
 
-# compare (dgi, masking, supervised)_zinc_small: what is the best pretraining method?
+# # unsup -> sup with calculated labels 
+# python pretrain_gin_supervised.py --config config/pretrain_supervised.json --exp_name pretrain_gin_masking_zincfull_supervised_zincfull --dataset zinc_full --gpu_id 3 --ckpt pretrain_gin_masking_zinc_full
+
+# directly unsup + sup
+python pretrain_gin_masking.py --config config/pretrain_masking.json --exp_name pretrain_gin_maskingsup1_zinc_full --dataset zinc_full --gpu_id 2 --sup_ratio 1

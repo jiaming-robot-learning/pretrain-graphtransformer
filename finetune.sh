@@ -23,8 +23,17 @@ for ckpt in out/checkpoints/*; do
       continue
    fi
  echo "Finetuning ${ckpt##*/}"
- python finetune_gt.py --ckpt ${ckpt##*/} --gpu_id 1
+#  python finetune_gt.py --ckpt ${ckpt##*/} --gpu_id 1
+if [[ "${ckpt##*/}" =~ ^pretrain_gin.* ]]; then
+   python finetune_gin.py --ckpt ${ckpt##*/} --gpu_id 1
+   
+else
+   python finetune_gt.py --ckpt ${ckpt##*/} --gpu_id 1
+ 
+fi
 done
+
+
 
 # # without using a checkpoint
 # for ckpt in no_pretrain; do
@@ -44,3 +53,4 @@ done
 
 # no_pretrain
 #  python finetune_gt.py --ckpt no_pretrain --gpu_id 1
+# python finetune_gin.py --ckpt no_pretrain --gpu_id 1
