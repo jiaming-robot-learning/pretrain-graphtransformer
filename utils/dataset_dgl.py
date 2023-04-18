@@ -1,5 +1,5 @@
 
-# Part of code borrowed from 
+# Part of code adapted from https://github.com/graphdeeplearning/graphtransformer
 import torch
 import random
 import json
@@ -24,7 +24,7 @@ from utils.dataset_pyg import MoleculeDatasetG, allowable_features
 import threading
 from dgl.data.utils import save_graphs, load_graphs
 import matplotlib.pyplot as plt
-
+import pandas as pd
 MASK_ID = len(allowable_features['possible_atomic_num_list'])
 
 def self_loop(g):
@@ -420,10 +420,10 @@ def print_stats_all_dataset():
             'chembl_filtered',
             'bbbp',
             'clintox',
-            'esol',
-            'freesolv',
+            # 'esol',
+            # 'freesolv',
             'hiv',
-            'lipophilicity',
+            # 'lipophilicity',
             'muv',
             'tox21',
             'toxcast',
@@ -445,10 +445,13 @@ def print_stats_all_dataset():
 
     atom_dist = []
     all_dist = {}
+    all_stats = {}
     for dataset_name in datasets:
         with open(f'out/dataset_stats/stats_{dataset_name}.json', 'r') as f:
             stats = json.load(f)
         atom_dist.append(stats['atom_dist'])
+        all_stats[dataset_name] = stats
+        
     for dist1, name1 in zip(atom_dist, datasets):
         for dist2, name2 in zip(atom_dist, datasets):
             hd = hellinger(dist1, dist2)
@@ -457,6 +460,10 @@ def print_stats_all_dataset():
             
     with open(f'out/dataset_stats/hellinger_dist.json', 'w') as f:
         json.dump(all_dist, f)
+        
+    all_stats_pd = pd.DataFrame(all_stats)
+    all_stats_pd.to_csv(f'out/dataset_stats/all_stats.csv')
+    
 def process_all_dataset(reprocess=False):
     """Create dgl graph datasets
 

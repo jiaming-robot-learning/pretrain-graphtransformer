@@ -1,5 +1,5 @@
 
-# borrowed from graph transformer https://github.com/graphdeeplearning/graphtransformer
+# adapted from graph transformer https://github.com/graphdeeplearning/graphtransformer
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

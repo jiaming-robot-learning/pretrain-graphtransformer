@@ -1,5 +1,5 @@
 
-# adapted from 
+# adapted from https://github.com/snap-stanford/pretrain-gnns/
 import os
 import torch
 import pickle

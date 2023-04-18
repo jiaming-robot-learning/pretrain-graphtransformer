@@ -34,6 +34,21 @@ tags = ['test/_roc_auc','val/_roc_auc']
 num_epochs_to_count = 5
 results = {}
 residue_all = {}
+pretrain_datasets_tmp = {
+    'zinc_small':'zinc_small',
+    'zinc_full':"zinc_full",
+    'zincfull':'zinc_full',
+    'chembl':'chembl_filtered',
+    }
+pretrain_datasets = {
+    'zinc_small':'ZINC 250k',
+    'zinc_full':"ZINC 1M",
+    'zincfull':'ZINC 1M',
+    'chembl':'ChemBL',
+    }
+
+no_pretrain = {
+}
 for d in os.listdir(path):
     if os.path.isdir(path+d) and d.startswith('finetune'):
         exp_name = '_'.join(d.split('_')[1:-1])
@@ -52,8 +67,9 @@ for d in os.listdir(path):
             residuals = [abs(x - y) for x, y in zip(original, smoothed)]
             residual = np.mean(residuals)
             residual_tmp += residual
-        
+                
         results[exp_name][db_name] = v/len(tags)
+
         residue_all[exp_name] = residual_tmp/len(tags)
         
 for k in results.keys():
@@ -63,14 +79,14 @@ for k in results.keys():
     results[k]['avg'] = avg/len(results[k].keys())
     results[k]['residual'] = residue_all[k]
 
+    for d,dv in pretrain_datasets.items():
+        if k.find(d) != -1:
+            results[k]['pretrain_dataset'] = dv
+            results[k]['pretrain_dataset_tmp'] = pretrain_datasets_tmp[d]
+            break
+
 results_df = pd.DataFrame(results)
-
-results_df.to_csv('out/processed_results.csv')
-# print(results)
-print(results_df)
-
-
-print(residue_all)
+results_df = results_df.transpose()
 
 with open('out/dataset_stats/hellinger_dist.json', 'r') as f:
     hellinger_dist = json.load(f)
@@ -85,3 +101,22 @@ for k,v in hellinger_dist.items():
 hd_df = pd.DataFrame(hd)
 hd_df.to_csv('out/dataset_stats/hd.csv')
 
+# calculate the correlation between rows of results and rows of hellinger distance for columns in the list
+columns = ['clintox','muv','bace','bbbp','hiv','sider','tox21','toxcast']
+
+for i in range(len(results_df)):
+    row = results_df.iloc[i]
+    if results_df.index[i].find('gin') != -1:
+        pretrain_row =results_df.loc['gin_no_pretrain',columns].astype(float)
+    else:
+        pretrain_row =results_df.loc['no_pretrain',columns].astype(float)
+        
+    pretrain_dataset = row['pretrain_dataset_tmp']
+    if pretrain_dataset not in hd_df.index:
+        continue
+    improvements = row[columns].astype(float) - pretrain_row
+    corr = improvements.corr(hd_df.loc[pretrain_dataset,columns])
+    results_df.loc[results_df.index[i],'corr'] = corr
+    
+print(results_df)
+results_df.to_csv('out/processed_results.csv')
