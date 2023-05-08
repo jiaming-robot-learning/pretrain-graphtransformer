@@ -25,6 +25,7 @@ from utils.dataset_dgl import load_dataset
 from utils.dataset_pyg import MoleculeDatasetG, allowable_features
 
 from utils.metrics import MAE
+from utils.util import count_parameters
 
 def train_epoch(model, optimizer, device, data_loader, epoch):
     model.train()
@@ -37,15 +38,17 @@ def train_epoch(model, optimizer, device, data_loader, epoch):
         batch_e = batch_graphs.edata['feat'].to(device)
         batch_targets = batch_targets.to(device)
         optimizer.zero_grad()
-        try:
+        batch_lap_pos_enc = None
+        if 'lap_pos_enc' in batch_graphs.ndata:
             batch_lap_pos_enc = batch_graphs.ndata['lap_pos_enc'].to(device)
             sign_flip = torch.rand(batch_lap_pos_enc.size(1)).to(device)
             sign_flip[sign_flip>=0.5] = 1.0; sign_flip[sign_flip<0.5] = -1.0
             batch_lap_pos_enc = batch_lap_pos_enc * sign_flip.unsqueeze(0)
-        except:
-            batch_lap_pos_enc = None
+        batch_rw_pos_enc = None
+        if 'rw_pos_enc' in batch_graphs.ndata:
+            batch_rw_pos_enc = batch_graphs.ndata['rw_pos_enc'].to(device)    
             
-        out = model.forward(batch_graphs, batch_x, batch_e, batch_lap_pos_enc, None)
+        out = model.forward(batch_graphs, batch_x, batch_e, batch_lap_pos_enc, None, batch_rw_pos_enc)
         batch_scores = out['scores']
         loss = model.loss(batch_scores, batch_targets)
         loss.backward()
@@ -186,18 +189,22 @@ def main():
                         default='config/pretrain_supervised.json')
     parser.add_argument('--gpu_id', help="Please give a value for gpu id")
     parser.add_argument('--dataset', help="Please give a value for dataset name",
-                        default='zinc_full')
+                        default='bbbp')
     parser.add_argument('--out_dir', help="Please give a value for out_dir",default='out/')
     parser.add_argument('--seed', help="Please give a value for seed")
     parser.add_argument('--epochs', help="Please give a value for epochs")
-    parser.add_argument('--exp_name', help="Please give a value for exp_name")
+    parser.add_argument('--exp_name', help="Please give a value for exp_name",default='debug')
     parser.add_argument('--ckpt', help="Please give a value for ckpt")
+    parser.add_argument('--load_pyg_dataset',type=bool,default=True)
 
 
     args = parser.parse_args()
     with open(args.config) as f:
         config = json.load(f)
-        
+
+    if args.load_pyg_dataset:
+        config['load_pyg_dataset'] = args.dataset
+                
     if args.gpu_id is not None:
         config['gpu']['id'] = int(args.gpu_id)
         config['gpu']['use'] = True
@@ -243,6 +250,10 @@ def main():
         os.makedirs(out_dir + 'checkpoints')
 
     model = GraphTransformerNet(net_params)
+    
+
+    print(f'#Params: {count_parameters(model)}')
+    
     if args.ckpt is not None:
         
         ckpt_dir = f'{out_dir}/checkpoints/{args.ckpt}'

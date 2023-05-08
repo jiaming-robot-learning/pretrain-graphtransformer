@@ -99,6 +99,26 @@ def laplacian_positional_encoding(g, pos_enc_dim, padding='node'):
     g.ndata['lap_pos_enc'] = torch.from_numpy(EigVec[:,1:pos_enc_dim+1]).float() 
     
     return g
+def rw_positional_encoding(g,pos_enc_dim):
+    """
+        Random Walk Positional Encoding
+    """
+    A = g.adjacency_matrix(scipy_fmt="csr")
+    Dinv = sp.diags(dgl.backend.asnumpy(g.in_degrees()).clip(1) ** -1.0, dtype=float) # D^-1
+    RW = A * Dinv  
+    M = RW
+    
+    # Iterate
+    nb_pos_enc = pos_enc_dim
+    PE = [torch.from_numpy(M.diagonal()).float()]
+    M_power = M
+    for _ in range(nb_pos_enc-1):
+        M_power = M_power * M
+        PE.append(torch.from_numpy(M_power.diagonal()).float())
+    PE = torch.stack(PE,dim=-1)
+    g.ndata['rw_pos_enc'] = PE 
+    
+    return g
 
 def wl_positional_encoding(g):
     """
@@ -267,12 +287,17 @@ class MoleculeDGL(torch.utils.data.Dataset):
         
         self.graph_lists = []
         self.graph_labels = []
+        self.pyg_dataset = None
+        self.load_pyg_dataset = config.get('load_pyg_dataset',None)
         if config is not None:
+            net_param = config['net_params']
             self.pe_dim = config['net_params']['pos_enc_dim']
             self.label_idx_list = config.get('label_idx_list',None)
             self.label_idx_start = config.get('label_idx_start',None)
             self.label_idx_end = config.get('label_idx_end',None)
             self.max_num_graphs = config.get('max_num_graphs',None)
+            self.lappe = net_param.get('lap_pos_enc',False)
+            self.rwpe = net_param.get('rw_pos_enc',False)
 
         if data is not None:
             self.data = data
@@ -287,24 +312,29 @@ class MoleculeDGL(torch.utils.data.Dataset):
         save_graphs(f'dataset/{name}/processed/dataset_dgl_{split}.pkl', self.graph_lists, labels=labels)
 
     def load(self,name,split):
-        fname = f'dataset/{name}/processed/dataset_dgl_{split}.pkl'
-        if os.path.exists(fname):
-            print(f'Loading dataset from {fname}...')
-            self.graph_lists, self.graph_labels = load_graphs(f'dataset/{name}/processed/dataset_dgl_{split}.pkl')
-
-                
-            if bool(self.graph_labels):
-                self.graph_labels = list(self.graph_labels['glabel'])
-            else:
-                self.graph_labels = []
-
-            # limit the max size
-            if self.max_num_graphs is not None:
-                self.graph_lists = self.graph_lists[:self.max_num_graphs]
-                self.graph_labels = self.graph_labels[:self.max_num_graphs]
-
+        if self.load_pyg_dataset is not None:
+            root = "dataset/" + self.load_pyg_dataset
+            self.pyg_dataset = MoleculeDatasetG(root, dataset=self.load_pyg_dataset)
+            print(f'Loaded pyG dataset {self.load_pyg_dataset} from {root}...')
         else:
-            print(f'File {fname} doesnot exist. Init empty dataset instead.')
+            fname = f'dataset/{name}/processed/dataset_dgl_{split}.pkl'
+            if os.path.exists(fname):
+                print(f'Loading dataset from {fname}...')
+                self.graph_lists, self.graph_labels = load_graphs(f'dataset/{name}/processed/dataset_dgl_{split}.pkl')
+
+                    
+                if bool(self.graph_labels):
+                    self.graph_labels = list(self.graph_labels['glabel'])
+                else:
+                    self.graph_labels = []
+
+                # limit the max size
+                if self.max_num_graphs is not None:
+                    self.graph_lists = self.graph_lists[:self.max_num_graphs]
+                    self.graph_labels = self.graph_labels[:self.max_num_graphs]
+
+            else:
+                print(f'File {fname} doesnot exist. Init empty dataset instead.')
 
     def _prepare(self):
         
@@ -342,6 +372,8 @@ class MoleculeDGL(torch.utils.data.Dataset):
         
     def __len__(self):
         """Return the number of graphs in the dataset."""
+        if self.load_pyg_dataset is not None:
+            return len(self.pyg_dataset)
         return len(self.graph_lists)
 
     def __getitem__(self, idx):
@@ -357,20 +389,44 @@ class MoleculeDGL(torch.utils.data.Dataset):
                 DGLGraph with node feature stored in `feat` field
                 And its label.
         """
-        g = self.graph_lists[idx]
-        if 'lap_pos_enc' not in g.ndata:
-            g = laplacian_positional_encoding(g, self.pe_dim)
-        self.graph_lists[idx] = g
+        if self.pyg_dataset is not None:
+            molecule = self.pyg_dataset[idx]
+            node_features = molecule.x.long()[:,0] # only using the atom type
+            edge_features = molecule.edge_attr.long()[:,0] # only using the bond type
+            
+            # Create the DGL Graph
+            g = dgl.DGLGraph()
+            g.add_nodes(molecule.x.shape[0])
+            g.ndata['feat'] = node_features
 
+            g.add_edges(molecule.edge_index[0,:], molecule.edge_index[1,:])
+            g.edata['feat'] = edge_features
+            label = molecule.y
+
+        else:
+            g = self.graph_lists[idx]
+            label = self.graph_labels[idx]
+            
+            
+        if self.lappe and 'lap_pos_enc' not in g.ndata:
+            g = laplacian_positional_encoding(g, self.pe_dim)
+
+        if self.rwpe and 'rw_pos_enc' not in g.ndata:
+            g = rw_positional_encoding(g, self.pe_dim)
+
+        if self.pyg_dataset is None:
+            self.graph_lists[idx] = g
+        
+        
         if self.label_idx_start is not None and self.label_idx_end is not None:
-            return g, self.graph_labels[idx][self.label_idx_start:self.label_idx_end]
+            return g, label[self.label_idx_start:self.label_idx_end]
         if self.label_idx_start is not None:
-            return g, self.graph_labels[idx][self.label_idx_start:]
+            return g, label[self.label_idx_start:]
         if self.label_idx_end is not None:
-            return g, self.graph_labels[idx][:self.label_idx_end]
+            return g, label[:self.label_idx_end]
         if self.label_idx_list is not None:
-            return g, self.graph_labels[idx][self.label_idx_list]
-        return g, self.graph_labels[idx]
+            return g, label[self.label_idx_list]
+        return g, label
 
 def print_stat(dataset,name):
     n_nodes = []

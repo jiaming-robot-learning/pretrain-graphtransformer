@@ -24,6 +24,7 @@ from net.gin import GINNet
 from utils.dataset_dgl import load_dataset
 from utils.dataset_pyg import MoleculeDatasetG, allowable_features
 
+from utils.util import count_parameters
 from utils.metrics import MAE
 
     
@@ -237,6 +238,7 @@ def main():
         os.makedirs(out_dir + 'checkpoints')
 
     model = GINNet(net_params=net_params)
+    print(f'GINNet number of parameters: {count_parameters(model)}')
 
     if args.ckpt is not None:
         

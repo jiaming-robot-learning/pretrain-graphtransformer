@@ -61,15 +61,16 @@ def train_epoch(model, optimizer, device, data_loader, epoch, sup_ratio):
         batch_e = batch_graphs.edata['feat'].to(device)
         batch_targets = batch_targets.to(device)
         optimizer.zero_grad()
-        try:
-            batch_lap_pos_enc = batch_graphs.ndata['lap_pos_enc'].to(device)
-            sign_flip = torch.rand(batch_lap_pos_enc.size(1)).to(device)
-            sign_flip[sign_flip>=0.5] = 1.0; sign_flip[sign_flip<0.5] = -1.0
-            batch_lap_pos_enc = batch_lap_pos_enc * sign_flip.unsqueeze(0)
-        except:
-            batch_lap_pos_enc = None
 
-        out = model.gt(batch_graphs, batch_x, batch_e, batch_lap_pos_enc, None)
+        batch_lap_pos_enc = None
+        if 'lap_pos_enc' in batch_graphs.ndata:
+            batch_lap_pos_enc = batch_graphs.ndata['lap_pos_enc'].to(device)
+        batch_rw_pos_enc = None
+        if 'rw_pos_enc' in batch_graphs.ndata:
+            batch_rw_pos_enc = batch_graphs.ndata['rw_pos_enc'].to(device)    
+
+        out = model.gt(batch_graphs, batch_x, batch_e, batch_lap_pos_enc, None,batch_rw_pos_enc)
+        
         batch_scores = out['scores']
         graph_ft = out['hg']
         node_ft = batch_graphs.ndata['h']

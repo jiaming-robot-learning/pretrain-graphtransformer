@@ -32,6 +32,7 @@ class GraphTransformerNet(nn.Module):
         self.device = net_params['device']
         self.lap_pos_enc = net_params['lap_pos_enc']
         self.wl_pos_enc = net_params['wl_pos_enc']
+        self.rw_pos_enc = net_params.get('rw_pos_enc',False)
         self.n_classes = net_params.get('n_classes',None)
         self.loss_type = net_params.get('loss_type','l1')
         
@@ -51,7 +52,10 @@ class GraphTransformerNet(nn.Module):
             self.embedding_lap_pos_enc = nn.Linear(pos_enc_dim, hidden_dim)
         if self.wl_pos_enc:
             self.embedding_wl_pos_enc = nn.Embedding(max_wl_role_index, hidden_dim)
-        
+        if self.rw_pos_enc:
+            pos_enc_dim = net_params['pos_enc_dim']
+            self.embedding_rw_pos_enc = nn.Linear(pos_enc_dim, hidden_dim)
+            
         self.embedding_h = nn.Embedding(num_atom_type, hidden_dim)
 
         if self.edge_feat:
@@ -70,7 +74,7 @@ class GraphTransformerNet(nn.Module):
         else:
             self.MLP_layer = None
         
-    def forward(self, g, h, e, h_lap_pos_enc=None, h_wl_pos_enc=None):
+    def forward(self, g, h, e, h_lap_pos_enc=None, h_wl_pos_enc=None,rw_pos_enc=None):
 
         # input embedding
         h = self.embedding_h(h)
@@ -81,6 +85,10 @@ class GraphTransformerNet(nn.Module):
         if self.wl_pos_enc:
             h_wl_pos_enc = self.embedding_wl_pos_enc(h_wl_pos_enc) 
             h = h + h_wl_pos_enc
+        if self.rw_pos_enc:
+            h_rw_pos_enc = self.embedding_rw_pos_enc(rw_pos_enc.float())
+            h = h + h_rw_pos_enc
+            
         if not self.edge_feat: # edge feature set to 1
             e = torch.ones(e.size(0),1).to(self.device)
         e = self.embedding_e(e)   

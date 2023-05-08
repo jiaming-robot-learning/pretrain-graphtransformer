@@ -6,7 +6,9 @@ def cycle_index(num, shift):
     arr[-shift:] = torch.arange(shift)
     return arr
     
-    
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
 def print_dataset(dataset):
     ys = [0,0]
     t_n = 0
