@@ -106,3 +106,8 @@ python pretrain_gt_supervised.py --config config/pretrain_supervised_chembl_natu
 python pretrain_gt_dgi.py --config config/pretrain_dgi_gtrwpesmall.json --exp_name pretrain_gtrwpesmall_dgisup05_zinc_small --dataset zinc_small --gpu_id 2 --sup_ratio 0.5
 python pretrain_gt_dgi.py --config config/pretrain_dgi_gtrwpesmall.json --exp_name pretrain_gtrwpesmall_dgisup1_zinc_small --dataset zinc_small --gpu_id 2 --sup_ratio 1
 python pretrain_gt_dgi.py --config config/pretrain_dgi_gtrwpesmall.json --exp_name pretrain_gtrwpesmall_dgisup2_zinc_small --dataset zinc_small --gpu_id 2 --sup_ratio 2
+
+
+
+####  supervised full size with smaller gt size
+python pretrain_gt_supervised.py --config config/pretrain_supervised_gtrwpesmaller.json --exp_name pretrain_gtrwpesmaller_supervised_zinc_full --dataset zinc_full --gpu_id 3 --load_pyg_dataset True
